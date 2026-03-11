@@ -61,65 +61,72 @@ pipeline {
         }
         
         stage('Deploy WAR') {
-            steps {
-                bat '''
-                    @echo off
-                    echo ========================================
-                    echo Deploying WAR application...
-                    echo ========================================
-                    
-                    :: Kill any existing Java process on port 9090
-                    echo Stopping existing application...
-                    for /f "tokens=5" %%a in ('netstat -ano ^| findstr :9090 ^| findstr LISTENING') do (
-                        echo Killing PID: %%a
-                        taskkill /F /PID %%a 2>nul
-                    )
-                    
-                    :: Get WAR file name
-                    for %%f in (target\\*.war) do set WAR_FILE=%%f
-                    echo Using WAR: %WAR_FILE%
-                    
-                    :: Run the WAR file (Spring Boot executable WAR)
-                    echo Starting application from WAR...
-                    start /B java -jar %WAR_FILE% --server.port=%PORT% > app.log 2>&1
-                    
-                    echo Waiting for application to start...
-                    timeout /t 20 /nobreak
-                    
-                    :: Check if application is running
-                    echo ========================================
-                    echo Checking application status...
-                    echo ========================================
-                    
-                    netstat -ano | findstr :9090 | findstr LISTENING
-                    
-                    if errorlevel 1 (
-                        echo ❌ Application failed to start!
-                        echo ========================================
-                        echo Last 20 lines of log:
-                        echo ========================================
-                        powershell -Command "Get-Content app.log -Tail 20"
-                        exit 1
-                    ) else (
-                        echo ✅ Application is running on port %PORT%!
-                    )
-                    
-                    :: Test the application
-                    echo ========================================
-                    echo Testing application endpoints...
-                    echo ========================================
-                    
-                    powershell -Command "try { $response = Invoke-WebRequest -Uri http://localhost:%PORT%/ -UseBasicParsing -TimeoutSec 5; if ($response.StatusCode -eq 200) { Write-Host '✅ Home page is up!' } else { Write-Host '❌ Home page returned ' + $response.StatusCode } } catch { Write-Host '❌ Home page failed: ' + $_.Exception.Message }"
-                    
-                    powershell -Command "try { $response = Invoke-WebRequest -Uri http://localhost:%PORT%/health -UseBasicParsing -TimeoutSec 5; if ($response.StatusCode -eq 200) { Write-Host '✅ Health check is up!' } else { Write-Host '❌ Health check returned ' + $response.StatusCode } } catch { Write-Host '❌ Health check failed: ' + $_.Exception.Message }"
-                    
-                    echo ========================================
-                    echo ✅ Deployment completed!
-                    echo ========================================
-                    echo Access your application at: http://localhost:%PORT%/
-                    echo ========================================
-                '''
-            }
+    steps {
+        bat '''
+            @echo off
+            echo ========================================
+            echo Deploying WAR application...
+            echo ========================================
+            
+            :: Kill any existing Java process on port 9090
+            echo Stopping existing application...
+            for /f "tokens=5" %%a in ('netstat -ano ^| findstr :9090 ^| findstr LISTENING') do (
+                echo Killing PID: %%a
+                taskkill /F /PID %%a 2>nul
+            )
+            
+            :: Get WAR file name
+            for %%f in (target\\*.war) do set WAR_FILE=%%f
+            echo Using WAR: %WAR_FILE%
+            
+            :: Create a startup script instead of using start /B
+            echo Creating startup script...
+            (
+                echo @echo off
+                echo cd /d %CD%
+                echo java -jar %WAR_FILE% --server.port=%PORT% ^> app.log 2^>^&1
+            ) > start_app.bat
+            
+            echo Starting application from WAR...
+            
+            :: Use PowerShell to start the process in background
+            powershell -Command "Start-Process -FilePath 'cmd.exe' -ArgumentList '/c start_app.bat' -WindowStyle Hidden -PassThru"
+            
+            echo Waiting for application to start...
+            timeout /t 20 /nobreak
+            
+            :: Check if application is running
+            echo ========================================
+            echo Checking application status...
+            echo ========================================
+            
+            netstat -ano | findstr :9090 | findstr LISTENING
+            if errorlevel 1 (
+                echo ❌ Application failed to start!
+                echo ========================================
+                echo Application log:
+                echo ========================================
+                type app.log
+                exit 1
+            ) else (
+                echo ✅ Application is running on port %PORT%!
+            )
+            
+            :: Test the application
+            echo ========================================
+            echo Testing application endpoints...
+            echo ========================================
+            
+            timeout /t 5 /nobreak
+            
+            powershell -Command "$attempts=0; while($attempts -lt 3) { try { $response = Invoke-WebRequest -Uri http://localhost:%PORT%/ -UseBasicParsing -TimeoutSec 5; if ($response.StatusCode -eq 200) { Write-Host '✅ Home page is up!'; exit 0 } } catch { Write-Host 'Attempt ' + ($attempts+1) + ' failed, retrying...'; $attempts++; Start-Sleep -Seconds 3 } } Write-Host '❌ Application failed to respond'; exit 1"
+            
+            echo ========================================
+            echo ✅ Deployment completed!
+            echo ========================================
+        '''
+    }
+}
         }
         
         stage('Verify WAR Contents') {
