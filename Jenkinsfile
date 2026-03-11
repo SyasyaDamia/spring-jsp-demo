@@ -6,7 +6,7 @@ pipeline {
     }
     
     environment {
-        DEPLOY_PATH = "C:\\ProgramData\\Jenkins\\.jenkins\\workspace\\spring-jsp-demo\\deploy"
+        DEPLOY_PATH = "C:\\Users\\APU\\eclipse-workspace\\.metadata\\.plugins\\org.eclipse.wst.server.core\\tmp2\\webapps"
         WAR_NAME = 'spring-jsp-demo-0.0.1-SNAPSHOT.war'
     }
 
