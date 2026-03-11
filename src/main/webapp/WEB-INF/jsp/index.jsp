@@ -80,7 +80,6 @@
 </head>
 <body>
     <div class="container">
-        <div class="location-badge">📁 Location: src/main/resources/templates/index.jsp</div>
         
         <div class="nav">
             <a href="/">Home</a>
@@ -102,8 +101,7 @@
         
         <div style="margin-top: 20px; padding: 15px; background: #e8f4fd; border-radius: 5px;">
             <h4>📝 Note:</h4>
-            <p>This JSP is being served from the <strong>resources/templates</strong> folder instead of the traditional webapp/WEB-INF/jsp folder.</p>
-            <p>Configured using: <code>spring.mvc.view.prefix=/templates/</code></p>
+            <p>This JSP is being served from the <strong>---</strong> </p>
         </div>
     </div>
 </body>
