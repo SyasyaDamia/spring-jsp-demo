@@ -7,7 +7,7 @@ pipeline {
     
     environment {
         DEPLOY_PATH = "C:\\springbootprojects\\spring-jsp-demo\\target"
-        WAR_NAME = 'spring-jsp-demo-0.0.1-SNAPSHOT.war'
+        WAR_NAME = 'jenkinsDemo.war'
     }
 
     stages {
