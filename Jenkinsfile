@@ -24,12 +24,21 @@ pipeline {
         }
 
         stage('Deploy Application') {
-            steps {
-                bat '''
-                copy /Y "target\\%WAR_NAME%" "%DEPLOY_PATH%\\%WAR_NAME%"
-                echo Deployment completed
-                '''
-            }
-        }
+		    steps {
+		        bat '''
+		        :: First, check if WAR exists in Jenkins workspace
+		        if exist "target\\%WAR_NAME%" (
+		            copy /Y "target\\%WAR_NAME%" "C:\\springbootprojects\\spring-jsp-demo\\target\\%WAR_NAME%"
+		            echo Copied from Jenkins workspace to local project
+		        ) else (
+		            echo WAR not found in Jenkins workspace!
+		            echo Please build the project first in Jenkins
+		            dir target\\
+		            exit /b 1
+		        )
+		        echo Deployment completed
+		        '''
+		    }
+		}
     }
 }
