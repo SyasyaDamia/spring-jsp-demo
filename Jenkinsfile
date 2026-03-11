@@ -45,17 +45,13 @@ pipeline {
                     echo ========================================
                     mvn package -DskipTests
                     
-                    echo ========================================
-                    echo Checking WAR file...
-                    echo ========================================
-                    dir target\\*.war
-                    
                     if not exist target\\*.war (
                         echo ❌ WAR file not created!
                         exit /b 1
                     )
                     
                     echo ✅ WAR file created successfully!
+                    dir target\\*.war
                 '''
             }
         }
@@ -77,34 +73,37 @@ pipeline {
                         taskkill /F /PID %%a 2>nul
                     )
                     
-                    :: Also kill any Java processes from our app
-                    for /f "tokens=2" %%a in ('tasklist ^| findstr java ^| findstr spring-jsp-demo') do (
-                        echo Killing Java process: %%a
-                        taskkill /F /PID %%a 2>nul
-                    )
-                    
                     :: Get WAR file name
                     set WAR_FILE=
                     for %%f in (target\\*.war) do set WAR_FILE=%%f
                     
-                    if "!WAR_FILE!"=="" (
-                        echo ❌ No WAR file found!
-                        exit /b 1
-                    )
-                    
                     echo Using WAR: %WAR_FILE%
                     echo Current directory: %CD%
                     
-                    :: Create a standalone VBS launcher that runs independently
+                    :: Create a PowerShell script that runs completely detached
                     (
-                        echo Set WshShell = CreateObject("WScript.Shell"^)
-                        echo cmd = "cmd /c cd /d " ^& WshShell.CurrentDirectory ^& " && java -jar %WAR_FILE% --server.port=%PORT% > app.log 2>&1"
-                        echo WshShell.Run cmd, 0, False
-                    ) > "%TEMP%\\launch_app_%PORT%.vbs"
+                        echo `$logFile = "C:\\ProgramData\\Jenkins\\.jenkins\\workspace\\spring-jsp-demo\\app.log"
+                        echo `$warFile = "%WAR_FILE%"
+                        echo `$port = %PORT%
+                        echo.
+                        echo # Function to start the app
+                        echo function Start-App {
+                        echo     try {
+                        echo         `$process = Start-Process -FilePath "java" -ArgumentList "-jar `$warFile --server.port=`$port" -NoNewWindow -PassThru -RedirectStandardOutput `$logFile -RedirectStandardError `$logFile
+                        echo         `$process.Id ^| Out-File -FilePath "C:\\ProgramData\\Jenkins\\.jenkins\\workspace\\spring-jsp-demo\\app.pid"
+                        echo         return `$process
+                        echo     } catch {
+                        echo         `$_.Exception.Message ^| Out-File -FilePath "C:\\ProgramData\\Jenkins\\.jenkins\\workspace\\spring-jsp-demo\\error.log"
+                        echo     }
+                        echo }
+                        echo.
+                        echo # Start the app
+                        echo Start-App
+                    ) > "%TEMP%\\start_app.ps1"
                     
-                    :: Start the app completely detached
+                    :: Execute the PowerShell script in a completely detached way
                     echo Starting application from WAR...
-                    start /B wscript.exe "%TEMP%\\launch_app_%PORT%.vbs"
+                    start /B powershell -ExecutionPolicy Bypass -WindowStyle Hidden -File "%TEMP%\\start_app.ps1"
                     
                     :: Wait for application to start
                     echo Waiting for application to start...
@@ -120,6 +119,9 @@ pipeline {
                         set FOUND=%%a
                         echo ✅ Application is running on port %PORT%!
                         echo Process ID: %%a
+                        
+                        :: Save PID to file
+                        echo %%a > app.pid
                     )
                     
                     if "!FOUND!"=="" (
@@ -131,6 +133,12 @@ pipeline {
                             type app.log
                         ) else (
                             echo app.log not found
+                        )
+                        if exist error.log (
+                            echo ========================================
+                            echo Error log:
+                            echo ========================================
+                            type error.log
                         )
                         exit /b 1
                     )
@@ -149,98 +157,143 @@ pipeline {
                         exit /b 1
                     )
                     
-                    :: Test health endpoint
-                    powershell -Command "try { $response = Invoke-WebRequest -Uri http://localhost:%PORT%/health -UseBasicParsing -TimeoutSec 5; if ($response.StatusCode -eq 200) { Write-Host '✅ Health check is up!' -ForegroundColor Green } else { Write-Host '⚠️ Health check returned ' + $response.StatusCode } } catch { Write-Host '⚠️ Health check not available' }"
-                    
                     echo ========================================
                     echo ✅ Deployment completed!
                     echo ========================================
                     echo Application URL: http://localhost:%PORT%/
                     echo Application is running DETACHED from Jenkins
-                    echo It will continue running after this job ends
+                    echo Process ID: !FOUND!
                     echo ========================================
                     
-                    :: Clean up temp file but keep app running
-                    del "%TEMP%\\launch_app_%PORT%.vbs" 2>nul
+                    :: Clean up temp files
+                    del "%TEMP%\\start_app.ps1" 2>nul
                 '''
             }
         }
         
-        stage('Verify Deployment Persists') {
+        stage('Verify Persistence') {
             steps {
                 bat '''
                     @echo off
                     echo ========================================
-                    echo Verifying application is still running...
+                    echo Verifying application persistence...
                     echo ========================================
                     
                     timeout /t 5 /nobreak
                     
+                    :: Check if app is still running
                     netstat -ano | findstr :9090 | findstr LISTENING
                     if errorlevel 1 (
                         echo ❌ Application stopped after deployment!
+                        
+                        :: Check if we have a saved PID
+                        if exist app.pid (
+                            set /p PID=<app.pid
+                            echo Checking PID !PID!...
+                            tasklist /fi "PID eq !PID!" | findstr java
+                        )
+                        
                         exit /b 1
                     ) else (
                         echo ✅ Application is still running!
-                    )
-                    
-                    :: Get process details
-                    for /f "tokens=5" %%a in ('netstat -ano ^| findstr :9090 ^| findstr LISTENING') do (
-                        echo Process ID: %%a
-                        tasklist /fi "PID eq %%a"
+                        
+                        :: Show process details
+                        for /f "tokens=5" %%a in ('netstat -ano ^| findstr :9090 ^| findstr LISTENING') do (
+                            echo Process ID: %%a
+                            echo.
+                            echo Process details:
+                            tasklist /fi "PID eq %%a"
+                        )
                     )
                     
                     echo ========================================
-                    echo ✅ Verification complete - app is persistent
+                    echo ✅ Persistence verified
                     echo ========================================
                 '''
             }
         }
         
-        stage('Create Startup Script') {
+        stage('Create Manual Scripts') {
             steps {
                 bat '''
                     @echo off
                     echo ========================================
-                    echo Creating manual startup script...
+                    echo Creating manual management scripts...
                     echo ========================================
                     
                     :: Get WAR file
                     for %%f in (target\\*.war) do set WAR_FILE=%%f
                     
-                    :: Create a batch file to manually start the app
+                    :: Create start script
                     (
                         echo @echo off
                         echo echo Starting Spring Boot application...
                         echo cd /d "%CD%"
-                        echo java -jar %WAR_FILE% --server.port=%PORT%
+                        echo start /B java -jar %WAR_FILE% --server.port=%PORT%
+                        echo echo Application started on port %PORT%!
+                        echo echo Check with: netstat -ano ^| findstr :%PORT%
                         echo pause
                     ) > start_app.bat
                     
-                    :: Create a README with instructions
+                    :: Create stop script
+                    (
+                        echo @echo off
+                        echo echo Stopping Spring Boot application on port %PORT%...
+                        echo for /f "tokens=5" %%%%a in ('netstat -ano ^^^| findstr :%PORT% ^^^| findstr LISTENING') do (
+                        echo     echo Killing PID: %%%%a
+                        echo     taskkill /F /PID %%%%a
+                        echo )
+                        echo echo Application stopped!
+                        echo pause
+                    ) > stop_app.bat
+                    
+                    :: Create status script
+                    (
+                        echo @echo off
+                        echo echo Checking application status on port %PORT%...
+                        echo echo.
+                        echo netstat -ano ^| findstr :%PORT% ^| findstr LISTENING
+                        echo if errorlevel 1 (
+                        echo     echo Application is NOT running
+                        echo ) else (
+                        echo     echo Application IS running
+                        echo )
+                        echo pause
+                    ) > status_app.bat
+                    
+                    :: Create README
                     (
                         echo ========================================
-                        echo SPRING BOOT APPLICATION - MANUAL START
+                        echo SPRING BOOT APPLICATION MANAGEMENT
                         echo ========================================
                         echo.
-                        echo Your application has been deployed by Jenkins
-                        echo and is running at: http://localhost:%PORT%/
+                        echo Application URL: http://localhost:%PORT%/
                         echo.
-                        echo If the application stops, you can restart it manually:
-                        echo 1. Open Command Prompt
-                        echo 2. cd %CD%
-                        echo 3. run: start_app.bat
+                        echo Commands:
+                        echo ---------
+                        echo start_app.bat  - Start the application
+                        echo stop_app.bat   - Stop the application
+                        echo status_app.bat - Check if application is running
                         echo.
-                        echo To stop the application:
-                        echo 1. Find the PID: netstat -ano ^| findstr :%PORT%
-                        echo 2. Kill it: taskkill /F /PID [PID_NUMBER]
+                        echo Manual commands:
+                        echo ----------------
+                        echo Check if running: netstat -ano ^| findstr :%PORT%
+                        echo Kill process:    taskkill /F /PID [PID]
+                        echo View logs:       type app.log
                         echo.
-                        echo Or use: taskkill /F /IM java.exe
-                        echo ========================================
+                        echo Current Status:
+                        echo ----------------
                     ) > README.txt
                     
-                    echo ✅ Startup script created: start_app.bat
-                    echo ✅ Instructions created: README.txt
+                    :: Append current status to README
+                    netstat -ano | findstr :%PORT% | findstr LISTENING >> README.txt
+                    
+                    echo ✅ Management scripts created:
+                    echo    - start_app.bat
+                    echo    - stop_app.bat
+                    echo    - status_app.bat
+                    echo    - README.txt
+                    echo ========================================
                 '''
             }
         }
@@ -249,19 +302,19 @@ pipeline {
     post {
         success {
             echo '========================================'
-            echo '✅ WAR PIPELINE COMPLETED SUCCESSFULLY!'
+            echo '✅ PIPELINE COMPLETED SUCCESSFULLY!'
             echo '========================================'
-            echo "WAR file: target/spring-jsp-demo-0.0.1-SNAPSHOT.war"
             echo "Application: http://localhost:${PORT}/"
             echo ""
-            echo "IMPORTANT: The application is running DETACHED from Jenkins"
-            echo "It will continue running even after this job ends"
+            echo "MANAGEMENT SCRIPTS CREATED:"
+            echo "  start_app.bat   - Start the app"
+            echo "  stop_app.bat    - Stop the app"
+            echo "  status_app.bat  - Check app status"
             echo ""
-            echo "To stop the application manually:"
-            echo "1. netstat -ano | findstr :${PORT}"
-            echo "2. taskkill /F /PID [PID_NUMBER]"
+            echo "To check if app is running now:"
+            echo "  netstat -ano | findstr :${PORT}"
             echo ""
-            echo "Or use: taskkill /F /IM java.exe"
+            echo "The application is running DETACHED from Jenkins"
             echo "========================================"
         }
         failure {
@@ -272,9 +325,8 @@ pipeline {
             echo '========================================'
         }
         always {
-            echo '========================================'
-            echo 'Pipeline execution completed'
-            echo '========================================'
+            // Clean up temp files but leave app running
+            bat 'del /f /q "%TEMP%\\start_app.ps1" 2>nul || exit 0'
         }
     }
 }
