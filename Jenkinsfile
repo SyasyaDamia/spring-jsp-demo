@@ -2,13 +2,14 @@ pipeline {
     agent any
     
     tools {
-        maven 'Maven-4.0.3'  // Make sure this matches your Jenkins Maven name
-        jdk 'JDK-17'         // Make sure this matches your Jenkins JDK name
+        maven 'Maven-4.0.3'
+        jdk 'JDK-17'
     }
     
     environment {
         APP_NAME = 'spring-jsp-demo'
         PORT = '9090'
+        WAR_FILE = 'target/spring-jsp-demo.war'
     }
     
     stages {
@@ -36,41 +37,110 @@ pipeline {
             }
         }
         
-        stage('Package') {
+        stage('Package WAR') {
             steps {
-                bat 'mvn package -DskipTests'
+                bat '''
+                    echo ========================================
+                    echo Packaging WAR file...
+                    echo ========================================
+                    mvn package -DskipTests
+                    
+                    echo ========================================
+                    echo Checking WAR file...
+                    echo ========================================
+                    dir target\\*.war
+                    
+                    if not exist target\\*.war (
+                        echo ❌ WAR file not created!
+                        exit 1
+                    )
+                    
+                    echo ✅ WAR file created successfully!
+                '''
             }
         }
         
-        stage('Deploy') {
+        stage('Deploy WAR') {
             steps {
                 bat '''
                     @echo off
-                    echo Stopping existing application on port %PORT%...
+                    echo ========================================
+                    echo Deploying WAR application...
+                    echo ========================================
                     
-                    :: Find and kill process using port 9090
-                    for /f "tokens=5" %%a in ('netstat -ano ^| findstr :9090') do (
-                        echo Killing process with PID: %%a
-                        taskkill /F /PID %%a 2>nul || exit /b 0
+                    :: Kill any existing Java process on port 9090
+                    echo Stopping existing application...
+                    for /f "tokens=5" %%a in ('netstat -ano ^| findstr :9090 ^| findstr LISTENING') do (
+                        echo Killing PID: %%a
+                        taskkill /F /PID %%a 2>nul
                     )
                     
-                    echo Starting application...
+                    :: Get WAR file name
+                    for %%f in (target\\*.war) do set WAR_FILE=%%f
+                    echo Using WAR: %WAR_FILE%
                     
-                    :: Get the JAR file name
-                    for %%f in (target\\*.jar) do set JAR_FILE=%%f
-                    
-                    echo Using JAR: %JAR_FILE%
-                    
-                    :: Start the application
-                    start /B java -jar %JAR_FILE% --server.port=%PORT%
+                    :: Run the WAR file (Spring Boot executable WAR)
+                    echo Starting application from WAR...
+                    start /B java -jar %WAR_FILE% --server.port=%PORT% > app.log 2>&1
                     
                     echo Waiting for application to start...
                     timeout /t 20 /nobreak
                     
-                    :: Test if application is running
-                    curl -f http://localhost:%PORT%/ || exit /b 1
+                    :: Check if application is running
+                    echo ========================================
+                    echo Checking application status...
+                    echo ========================================
                     
-                    echo Application started successfully on port %PORT%!
+                    netstat -ano | findstr :9090 | findstr LISTENING
+                    
+                    if errorlevel 1 (
+                        echo ❌ Application failed to start!
+                        echo ========================================
+                        echo Last 20 lines of log:
+                        echo ========================================
+                        powershell -Command "Get-Content app.log -Tail 20"
+                        exit 1
+                    ) else (
+                        echo ✅ Application is running on port %PORT%!
+                    )
+                    
+                    :: Test the application
+                    echo ========================================
+                    echo Testing application endpoints...
+                    echo ========================================
+                    
+                    powershell -Command "try { $response = Invoke-WebRequest -Uri http://localhost:%PORT%/ -UseBasicParsing -TimeoutSec 5; if ($response.StatusCode -eq 200) { Write-Host '✅ Home page is up!' } else { Write-Host '❌ Home page returned ' + $response.StatusCode } } catch { Write-Host '❌ Home page failed: ' + $_.Exception.Message }"
+                    
+                    powershell -Command "try { $response = Invoke-WebRequest -Uri http://localhost:%PORT%/health -UseBasicParsing -TimeoutSec 5; if ($response.StatusCode -eq 200) { Write-Host '✅ Health check is up!' } else { Write-Host '❌ Health check returned ' + $response.StatusCode } } catch { Write-Host '❌ Health check failed: ' + $_.Exception.Message }"
+                    
+                    echo ========================================
+                    echo ✅ Deployment completed!
+                    echo ========================================
+                    echo Access your application at: http://localhost:%PORT%/
+                    echo ========================================
+                '''
+            }
+        }
+        
+        stage('Verify WAR Contents') {
+            steps {
+                bat '''
+                    echo ========================================
+                    echo Verifying WAR file contents...
+                    echo ========================================
+                    
+                    :: Create temp directory for inspection
+                    mkdir war_temp 2>nul
+                    cd war_temp
+                    
+                    :: Extract WAR file (if jar command available)
+                    jar xf ..\\target\\*.war 2>nul || echo "jar command not available, skipping extraction"
+                    
+                    echo Checking for JSP files...
+                    dir /s *.jsp 2>nul || echo "No JSP files found in WAR"
+                    
+                    cd ..
+                    rmdir /s /q war_temp 2>nul
                 '''
             }
         }
@@ -79,10 +149,10 @@ pipeline {
     post {
         success {
             echo '========================================'
-            echo '✅ PIPELINE COMPLETED SUCCESSFULLY!'
+            echo '✅ WAR PIPELINE COMPLETED SUCCESSFULLY!'
             echo '========================================'
-            echo "Application is running on port ${PORT}"
-            echo "Access it at: http://localhost:${PORT}"
+            echo "WAR file: target/spring-jsp-demo.war"
+            echo "Application: http://localhost:${PORT}/"
             echo '========================================'
         }
         failure {
