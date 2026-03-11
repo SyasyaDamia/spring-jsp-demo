@@ -9,7 +9,7 @@ pipeline {
     environment {
         APP_NAME = 'spring-jsp-demo'
         PORT = '9090'
-        WAR_FILE = 'target/spring-jsp-demo.war'
+        WAR_FILE = 'target/spring-jsp-demo-0.0.1-SNAPSHOT.war'
     }
     
     stages {
