@@ -17,7 +17,7 @@ public class HomeController {
     @Value("${server.port:9090}")
     private String port;
     
-    @GetMapping("/")
+    @GetMapping
     public String home(Model model) {
         model.addAttribute("message", "Hello from Spring Boot!");
         model.addAttribute("currentTime", LocalDateTime.now()
