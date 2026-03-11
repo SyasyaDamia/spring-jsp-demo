@@ -9,7 +9,7 @@ pipeline {
     environment {
         APP_NAME = 'spring-jsp-demo'
         PORT = '9090'
-        WAR_FILE = 'target/spring-jsp-demo-0.0.1-SNAPSHOT.war'
+        WORKSPACE_DIR = "${WORKSPACE}"
     }
     
     stages {
@@ -52,7 +52,7 @@ pipeline {
                     
                     if not exist target\\*.war (
                         echo ❌ WAR file not created!
-                        exit 1
+                        exit /b 1
                     )
                     
                     echo ✅ WAR file created successfully!
@@ -61,167 +61,189 @@ pipeline {
         }
         
         stage('Deploy WAR') {
-    steps {
-        powershell '''
-            Write-Host "========================================" -ForegroundColor Cyan
-            Write-Host "Deploying WAR application..." -ForegroundColor Cyan
-            Write-Host "========================================" -ForegroundColor Cyan
-            
-            # Kill any existing Java process on port 9090
-            Write-Host "Stopping existing application..." -ForegroundColor Yellow
-            try {
-                $connections = Get-NetTCPConnection -LocalPort 9090 -ErrorAction SilentlyContinue
-                foreach ($conn in $connections) {
-                    Write-Host "Killing PID: $($conn.OwningProcess)"
-                    Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue
-                }
-            } catch {
-                Write-Host "No existing processes found"
-            }
-            
-            # Get WAR file
-            $warFile = Get-ChildItem -Path "target\\*.war" | Select-Object -First 1
-            if (-not $warFile) {
-                Write-Host "❌ No WAR file found!" -ForegroundColor Red
-                exit 1
-            }
-            Write-Host "Using WAR: $($warFile.FullName)" -ForegroundColor Green
-            
-            # Create a simple batch file to run the app (more reliable)
-            $batchContent = @"
-@echo off
-cd /d "$env:WORKSPACE"
-java -jar "$($warFile.FullName)" --server.port=$env:PORT > app.log 2>&1
-"@
-            $batchPath = "$env:WORKSPACE\\run_app.bat"
-            $batchContent | Out-File -FilePath $batchPath -Encoding ASCII -Force
-            
-            # Start the application using WScript (silent)
-            $vbsContent = @"
-Set WshShell = CreateObject("WScript.Shell")
-WshShell.Run "$batchPath", 0, False
-"@
-            $vbsPath = "$env:WORKSPACE\\launch.vbs"
-            $vbsContent | Out-File -FilePath $vbsPath -Encoding ASCII -Force
-            
-            Write-Host "Starting application from WAR..." -ForegroundColor Yellow
-            cscript //nologo "$vbsPath"
-            
-            Write-Host "Waiting for application to start..." -ForegroundColor Yellow
-            Start-Sleep -Seconds 20
-            
-            # Check if application is running
-            Write-Host "========================================" -ForegroundColor Cyan
-            Write-Host "Checking application status..." -ForegroundColor Cyan
-            Write-Host "========================================" -ForegroundColor Cyan
-            
-            $portCheck = Get-NetTCPConnection -LocalPort $env:PORT -ErrorAction SilentlyContinue
-            if (-not $portCheck) {
-                Write-Host "❌ Application failed to start!" -ForegroundColor Red
-                Write-Host "========================================" -ForegroundColor Red
-                Write-Host "Application log:" -ForegroundColor Red
-                Write-Host "========================================" -ForegroundColor Red
-                
-                if (Test-Path "$env:WORKSPACE\\app.log") {
-                    Get-Content "$env:WORKSPACE\\app.log" -Tail 50
-                } else {
-                    Write-Host "Log file not found"
-                }
-                
-                # Check Java processes
-                Write-Host "`nJava processes running:" -ForegroundColor Yellow
-                Get-Process -Name "java" -ErrorAction SilentlyContinue | Format-Table Id, ProcessName, CPU
-                
-                exit 1
-            } else {
-                Write-Host "✅ Application is running on port $env:PORT!" -ForegroundColor Green
-                Write-Host "Process ID: $($portCheck.OwningProcess)" -ForegroundColor Green
-            }
-            
-            # Test the application
-            Write-Host "========================================" -ForegroundColor Cyan
-            Write-Host "Testing application endpoints..." -ForegroundColor Cyan
-            Write-Host "========================================" -ForegroundColor Cyan
-            
-            Start-Sleep -Seconds 5
-            
-            $attempts = 0
-            $maxAttempts = 3
-            while ($attempts -lt $maxAttempts) {
-                try {
-                    $response = Invoke-WebRequest -Uri "http://localhost:$env:PORT/" -UseBasicParsing -TimeoutSec 5
-                    if ($response.StatusCode -eq 200) {
-                        Write-Host "✅ Home page is up!" -ForegroundColor Green
-                        break
-                    }
-                } catch {
-                    $attempts++
-                    Write-Host "Attempt $attempts of $maxAttempts failed, retrying..." -ForegroundColor Yellow
-                    Start-Sleep -Seconds 3
-                }
-            }
-            
-            if ($attempts -eq $maxAttempts) {
-                Write-Host "❌ Application failed to respond" -ForegroundColor Red
-                exit 1
-            }
-            
-            # Test health endpoint
-            try {
-                $response = Invoke-WebRequest -Uri "http://localhost:$env:PORT/health" -UseBasicParsing -TimeoutSec 5
-                if ($response.StatusCode -eq 200) {
-                    Write-Host "✅ Health check is up!" -ForegroundColor Green
-                }
-            } catch {
-                Write-Host "⚠️ Health check not available (this is OK if not implemented)" -ForegroundColor Yellow
-            }
-            
-            Write-Host "========================================" -ForegroundColor Cyan
-            Write-Host "✅ Deployment completed!" -ForegroundColor Green
-            Write-Host "========================================" -ForegroundColor Cyan
-            Write-Host "Application URL: http://localhost:$env:PORT/" -ForegroundColor Green
-            Write-Host "========================================" -ForegroundColor Cyan
-            
-            # Clean up temporary files
-            Remove-Item "$env:WORKSPACE\\run_app.bat" -Force -ErrorAction SilentlyContinue
-            Remove-Item "$env:WORKSPACE\\launch.vbs" -Force -ErrorAction SilentlyContinue
-        '''
-    }
-}
-        
-        stage('Verify WAR Contents') {
             steps {
                 bat '''
+                    @echo off
+                    setlocal enabledelayedexpansion
+                    
                     echo ========================================
-                    echo Verifying WAR file contents...
+                    echo Deploying WAR application (detached)...
                     echo ========================================
                     
-                    :: Create temp directory for inspection
-                    mkdir war_temp 2>nul
-                    cd war_temp
+                    :: Kill any existing Java process on port 9090
+                    echo Stopping existing application...
+                    for /f "tokens=5" %%a in ('netstat -ano ^| findstr :9090 ^| findstr LISTENING') do (
+                        echo Killing PID: %%a
+                        taskkill /F /PID %%a 2>nul
+                    )
                     
-                    :: Extract WAR file (if jar command available)
-                    jar xf ..\\target\\*.war 2>nul || echo "jar command not available, skipping extraction"
+                    :: Also kill any Java processes from our app
+                    for /f "tokens=2" %%a in ('tasklist ^| findstr java ^| findstr spring-jsp-demo') do (
+                        echo Killing Java process: %%a
+                        taskkill /F /PID %%a 2>nul
+                    )
                     
-                    echo Checking for JSP files...
-                    dir /s *.jsp 2>nul || echo "No JSP files found in WAR"
+                    :: Get WAR file name
+                    set WAR_FILE=
+                    for %%f in (target\\*.war) do set WAR_FILE=%%f
                     
-                    cd ..
-                    rmdir /s /q war_temp 2>nul
+                    if "!WAR_FILE!"=="" (
+                        echo ❌ No WAR file found!
+                        exit /b 1
+                    )
+                    
+                    echo Using WAR: %WAR_FILE%
+                    echo Current directory: %CD%
+                    
+                    :: Create a standalone VBS launcher that runs independently
+                    (
+                        echo Set WshShell = CreateObject("WScript.Shell"^)
+                        echo cmd = "cmd /c cd /d " ^& WshShell.CurrentDirectory ^& " && java -jar %WAR_FILE% --server.port=%PORT% > app.log 2>&1"
+                        echo WshShell.Run cmd, 0, False
+                    ) > "%TEMP%\\launch_app_%PORT%.vbs"
+                    
+                    :: Start the app completely detached
+                    echo Starting application from WAR...
+                    start /B wscript.exe "%TEMP%\\launch_app_%PORT%.vbs"
+                    
+                    :: Wait for application to start
+                    echo Waiting for application to start...
+                    timeout /t 20 /nobreak
+                    
+                    :: Check if application is running
+                    echo ========================================
+                    echo Checking application status...
+                    echo ========================================
+                    
+                    set FOUND=
+                    for /f "tokens=5" %%a in ('netstat -ano ^| findstr :%PORT% ^| findstr LISTENING') do (
+                        set FOUND=%%a
+                        echo ✅ Application is running on port %PORT%!
+                        echo Process ID: %%a
+                    )
+                    
+                    if "!FOUND!"=="" (
+                        echo ❌ Application failed to start!
+                        echo ========================================
+                        echo Application log:
+                        echo ========================================
+                        if exist app.log (
+                            type app.log
+                        ) else (
+                            echo app.log not found
+                        )
+                        exit /b 1
+                    )
+                    
+                    :: Test the application
+                    echo ========================================
+                    echo Testing application endpoints...
+                    echo ========================================
+                    
+                    timeout /t 5 /nobreak
+                    
+                    powershell -Command "$attempts=0; while($attempts -lt 3) { try { $response = Invoke-WebRequest -Uri http://localhost:%PORT%/ -UseBasicParsing -TimeoutSec 5; if ($response.StatusCode -eq 200) { Write-Host '✅ Home page is up!' -ForegroundColor Green; exit 0 } } catch { $attempts++; Write-Host 'Attempt ' + $attempts + ' failed, retrying...'; Start-Sleep -Seconds 3 } } Write-Host '❌ Application failed to respond' -ForegroundColor Red; exit 1"
+                    
+                    if errorlevel 1 (
+                        echo ❌ Application test failed!
+                        exit /b 1
+                    )
+                    
+                    :: Test health endpoint
+                    powershell -Command "try { $response = Invoke-WebRequest -Uri http://localhost:%PORT%/health -UseBasicParsing -TimeoutSec 5; if ($response.StatusCode -eq 200) { Write-Host '✅ Health check is up!' -ForegroundColor Green } else { Write-Host '⚠️ Health check returned ' + $response.StatusCode } } catch { Write-Host '⚠️ Health check not available' }"
+                    
+                    echo ========================================
+                    echo ✅ Deployment completed!
+                    echo ========================================
+                    echo Application URL: http://localhost:%PORT%/
+                    echo Application is running DETACHED from Jenkins
+                    echo It will continue running after this job ends
+                    echo ========================================
+                    
+                    :: Clean up temp file but keep app running
+                    del "%TEMP%\\launch_app_%PORT%.vbs" 2>nul
                 '''
             }
         }
         
-        stage('Cleanup') {
-		    steps {
-		        powershell '''
-		            Write-Host "Cleaning up..." -ForegroundColor Yellow
-		            # Remove temporary files
-		            Remove-Item "$env:WORKSPACE\\run_app.ps1" -ErrorAction SilentlyContinue
-		            # Note: Don't remove job_id.txt as we might need it
-		        '''
-		    }
-		}
+        stage('Verify Deployment Persists') {
+            steps {
+                bat '''
+                    @echo off
+                    echo ========================================
+                    echo Verifying application is still running...
+                    echo ========================================
+                    
+                    timeout /t 5 /nobreak
+                    
+                    netstat -ano | findstr :9090 | findstr LISTENING
+                    if errorlevel 1 (
+                        echo ❌ Application stopped after deployment!
+                        exit /b 1
+                    ) else (
+                        echo ✅ Application is still running!
+                    )
+                    
+                    :: Get process details
+                    for /f "tokens=5" %%a in ('netstat -ano ^| findstr :9090 ^| findstr LISTENING') do (
+                        echo Process ID: %%a
+                        tasklist /fi "PID eq %%a"
+                    )
+                    
+                    echo ========================================
+                    echo ✅ Verification complete - app is persistent
+                    echo ========================================
+                '''
+            }
+        }
+        
+        stage('Create Startup Script') {
+            steps {
+                bat '''
+                    @echo off
+                    echo ========================================
+                    echo Creating manual startup script...
+                    echo ========================================
+                    
+                    :: Get WAR file
+                    for %%f in (target\\*.war) do set WAR_FILE=%%f
+                    
+                    :: Create a batch file to manually start the app
+                    (
+                        echo @echo off
+                        echo echo Starting Spring Boot application...
+                        echo cd /d "%CD%"
+                        echo java -jar %WAR_FILE% --server.port=%PORT%
+                        echo pause
+                    ) > start_app.bat
+                    
+                    :: Create a README with instructions
+                    (
+                        echo ========================================
+                        echo SPRING BOOT APPLICATION - MANUAL START
+                        echo ========================================
+                        echo.
+                        echo Your application has been deployed by Jenkins
+                        echo and is running at: http://localhost:%PORT%/
+                        echo.
+                        echo If the application stops, you can restart it manually:
+                        echo 1. Open Command Prompt
+                        echo 2. cd %CD%
+                        echo 3. run: start_app.bat
+                        echo.
+                        echo To stop the application:
+                        echo 1. Find the PID: netstat -ano ^| findstr :%PORT%
+                        echo 2. Kill it: taskkill /F /PID [PID_NUMBER]
+                        echo.
+                        echo Or use: taskkill /F /IM java.exe
+                        echo ========================================
+                    ) > README.txt
+                    
+                    echo ✅ Startup script created: start_app.bat
+                    echo ✅ Instructions created: README.txt
+                '''
+            }
+        }
     }
     
     post {
@@ -229,15 +251,29 @@ WshShell.Run "$batchPath", 0, False
             echo '========================================'
             echo '✅ WAR PIPELINE COMPLETED SUCCESSFULLY!'
             echo '========================================'
-            echo "WAR file: target/spring-jsp-demo.war"
+            echo "WAR file: target/spring-jsp-demo-0.0.1-SNAPSHOT.war"
             echo "Application: http://localhost:${PORT}/"
-            echo '========================================'
+            echo ""
+            echo "IMPORTANT: The application is running DETACHED from Jenkins"
+            echo "It will continue running even after this job ends"
+            echo ""
+            echo "To stop the application manually:"
+            echo "1. netstat -ano | findstr :${PORT}"
+            echo "2. taskkill /F /PID [PID_NUMBER]"
+            echo ""
+            echo "Or use: taskkill /F /IM java.exe"
+            echo "========================================"
         }
         failure {
             echo '========================================'
             echo '❌ PIPELINE FAILED!'
             echo '========================================'
             echo 'Check the console output for errors'
+            echo '========================================'
+        }
+        always {
+            echo '========================================'
+            echo 'Pipeline execution completed'
             echo '========================================'
         }
     }
