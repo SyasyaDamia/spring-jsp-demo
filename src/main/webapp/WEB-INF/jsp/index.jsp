@@ -84,7 +84,6 @@
         
         <div class="nav">
             <a href="/">Home</a>
-            <a href="/about">About</a>
         </div>
         
         <h1>🌸 Spring Boot with JSP in Templates Folder</h1>
