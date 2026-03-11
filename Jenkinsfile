@@ -2,43 +2,38 @@ pipeline {
     agent any
 
     tools {
-        maven 'Maven-4.0.3' 
+        maven 'Maven-4.0.3' // Make sure this matches the name in Global Tool Configuration
     }
     
-    environment {
-        DEPLOY_PATH = "C:\\springbootprojects\\spring-jsp-demo\\target"
-        WAR_NAME = 'jenkinsDemo.war'
-    }
+    environment
+    {
+		DEPLOY_PATH = "C:\\Users\\APU\\eclipse-workspace\\.metadata\\.plugins\\org.eclipse.wst.server.core\\tmp2\\webapps"
+		WAR_NAME = 'jenkinsDemo.war'
+	}
 
     stages {
         stage('Checkout') {
             steps {
+                // Replace with your URL and Credentials ID from Jenkins
                 git branch: 'main', url: 'https://github.com/SyasyaDamia/spring-jsp-demo.git'
             }
         }
 
         stage('Build') {
             steps {
-                bat 'mvn clean install'
+                bat 'mvn clean install' 
+                // Use 'bat' instead of 'sh' if your Jenkins is running on Windows
             }
         }
 
         stage('Deploy Application') {
-		    steps {
-		        bat '''
-		        :: First, check if WAR exists in Jenkins workspace
-		        if exist "target\\%WAR_NAME%" (
-		            copy /Y "target\\%WAR_NAME%" "C:\\springbootprojects\\spring-jsp-demo\\target\\%WAR_NAME%"
-		            echo Copied from Jenkins workspace to local project
-		        ) else (
-		            echo WAR not found in Jenkins workspace!
-		            echo Please build the project first in Jenkins
-		            dir target\\
-		            exit /b 1
-		        )
-		        echo Deployment completed
-		        '''
-		    }
-		}
-    }
+            steps {
+                bat '''
+                copy /Y "target\\%WAR_NAME%" "%DEPLOY_PATH%\\%WAR_NAME%"
+                echo Deployment completed
+                '''
+            }
+        }
+        }
+    
 }
