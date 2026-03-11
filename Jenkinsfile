@@ -2,12 +2,11 @@ pipeline {
     agent any
     
     tools {
-        maven 'Maven-4.0.3'  // Configure this in Jenkins
-        jdk 'JDK-17'         // Configure this in Jenkins
+        maven 'Maven-4.0.3'  // Make sure this matches your Jenkins Maven name
+        jdk 'JDK-17'         // Make sure this matches your Jenkins JDK name
     }
     
     environment {
-        // Application properties
         APP_NAME = 'spring-jsp-demo'
         PORT = '9090'
     }
@@ -22,13 +21,13 @@ pipeline {
         
         stage('Build') {
             steps {
-                sh 'mvn clean compile'
+                bat 'mvn clean compile'
             }
         }
         
         stage('Test') {
             steps {
-                sh 'mvn test'
+                bat 'mvn test'
             }
             post {
                 always {
@@ -39,24 +38,39 @@ pipeline {
         
         stage('Package') {
             steps {
-                sh 'mvn package -DskipTests'
+                bat 'mvn package -DskipTests'
             }
         }
         
         stage('Deploy') {
             steps {
-                sh '''
-                    # Stop existing application if running
-                    pkill -f ${APP_NAME} || true
+                bat '''
+                    @echo off
+                    echo Stopping existing application on port %PORT%...
                     
-                    # Run the application
-                    nohup java -jar target/*.jar --server.port=${PORT} > app.log 2>&1 &
+                    :: Find and kill process using port 9090
+                    for /f "tokens=5" %%a in ('netstat -ano ^| findstr :9090') do (
+                        echo Killing process with PID: %%a
+                        taskkill /F /PID %%a 2>nul || exit /b 0
+                    )
                     
-                    # Wait for application to start
-                    sleep 20
+                    echo Starting application...
                     
-                    # Check if application is running
-                    curl -f http://localhost:${PORT}/ || exit 1
+                    :: Get the JAR file name
+                    for %%f in (target\\*.jar) do set JAR_FILE=%%f
+                    
+                    echo Using JAR: %JAR_FILE%
+                    
+                    :: Start the application
+                    start /B java -jar %JAR_FILE% --server.port=%PORT%
+                    
+                    echo Waiting for application to start...
+                    timeout /t 20 /nobreak
+                    
+                    :: Test if application is running
+                    curl -f http://localhost:%PORT%/ || exit /b 1
+                    
+                    echo Application started successfully on port %PORT%!
                 '''
             }
         }
@@ -64,11 +78,19 @@ pipeline {
     
     post {
         success {
-            echo 'Pipeline completed successfully!'
+            echo '========================================'
+            echo '✅ PIPELINE COMPLETED SUCCESSFULLY!'
+            echo '========================================'
             echo "Application is running on port ${PORT}"
+            echo "Access it at: http://localhost:${PORT}"
+            echo '========================================'
         }
         failure {
-            echo 'Pipeline failed!'
+            echo '========================================'
+            echo '❌ PIPELINE FAILED!'
+            echo '========================================'
+            echo 'Check the console output for errors'
+            echo '========================================'
         }
     }
 }
